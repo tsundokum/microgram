@@ -19,7 +19,7 @@ from minigram import Bot
 bot = Bot('Put your bot api key here')
 
 @bot.handler
-async def echo(bot, update):                                              # https://core.telegram.org/bots/api#update
+async def echo(update):                                              # https://core.telegram.org/bots/api#update
     if message := update.get('message'):
         await bot.send_message(chat_id=message['chat']['id'],
                                text=message['text'],
