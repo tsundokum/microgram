@@ -212,7 +212,7 @@ class Bot:
             update = await queue.get()
             try:
                 for handle in self._handlers:
-                    r = await handle(self, update)
+                    r = await handle(update)
                     if r:
                         break
             except KeyboardInterrupt:
