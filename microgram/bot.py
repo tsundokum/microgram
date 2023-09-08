@@ -64,7 +64,7 @@ assert parse_entities(_m, ENTITY_URL) == {'www.leningrad.ru'}
 def func_reply_chaining(main_reply_id: Optional[int], prev_reply_id: Optional[int]) -> Optional[int]:
     """First message is reply to given message,
     then second message is reply to the first and so on."""
-    if main_reply_id and not main_reply_id:
+    if main_reply_id and not prev_reply_id:
         return main_reply_id
     if prev_reply_id:
         return prev_reply_id
