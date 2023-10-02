@@ -18,6 +18,8 @@ from .chunking import chunk
 
 
 POLL_TIMEOUT = 5
+POLL_WAIT_SEC = 1.5
+POLL_MAX_ERRORS = 10
 
 ENTITY_BOT_COMMAND = 'bot_command'
 ENTITY_URL = 'url'
@@ -161,26 +163,37 @@ class Bot:
 
         return r
 
-    async def poll(self, poll_timeout=POLL_TIMEOUT) -> AsyncGenerator:
+    async def poll(self, poll_timeout=POLL_TIMEOUT, poll_wait_sec=POLL_WAIT_SEC, max_errors=POLL_MAX_ERRORS) -> AsyncGenerator:
         async with httpx.AsyncClient() as client:
+            errors_count = 0
             while True:
+                if errors_count > max_errors:
+                    raise RuntimeError(f'Reached {errors_count} errors')
                 url = f'https://api.telegram.org/bot{self.token}/getUpdates?limit=1&offset={self.polling_offset}'
-                response = await client.get(url)
+                try:
+                    response = await client.get(url, timeout=poll_timeout)
+                except (httpx.ConnectError, httpx.TimeoutException) as ex:
+                    errors_count += 1
+                    await asyncio.sleep(poll_wait_sec)
+                    continue
+
                 resp = response.json()
                 if not resp.get('ok') and resp.get('error_code'):
                     if ra := resp.get('parameters', {}).get('retry_after'):
                         await asyncio.sleep(ra)
+                # Compare with None because updates can be emptry list
                 elif (updates := resp.get('result')) is not None:
-                    # Compare with None because updates can be emptry list
+                    errors_count = 0
                     for u in updates:
                         self.polling_offset = u['update_id'] + 1
                         self.updates_logger.info(u)
                         yield u
+                    
                 else:
                     print('NO RESULT', resp)
                     self.updates_logger.error('getUpdates', extra=resp)
 
-                await asyncio.sleep(poll_timeout)
+                await asyncio.sleep(poll_wait_sec)
 
     @asynccontextmanager
     async def chat_action(self, chat_id, action='typing', text_while_waiting=None):
