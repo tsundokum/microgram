@@ -105,7 +105,11 @@ class Bot:
         url = f'https://api.telegram.org/bot{self.token}/{method}'
         async with httpx.AsyncClient() as client:
             started = monotonic()
-            response = await client.post(url, json=kwargs)
+            if files := kwargs.get('files'):
+                data = {k: v for k, v in kwargs.items() if k != 'files'}
+                response = await client.post(url, data=data, files=files)
+            else:
+                response = await client.post(url, json=kwargs)
             try:
                 j = response.json()
             except:
@@ -118,18 +122,6 @@ class Bot:
                 raise Exception(f'Failed to call `{method}`: {response.status_code}, {response.text}')
             return j
 
-    # async def upload_video(self, file_path, **kwargs):
-    #     url = f'https://api.telegram.org/bot{self.token}/sendVideo'
-    #     data = aiohttp.FormData(quote_fields=False)
-    #     data.add_field(
-    #         "video", open(file_path, 'rb')
-    #     )
-    #     for k, v in kwargs.items():
-    #         v_ = v if type(v) != int else json.dumps(v)
-    #         data.add_field(k, json.dumps(v), content_type='application/json')
-    #     async with httpx.AsyncClient() as client:
-    #         async with client.post(url, data=data) as response:
-    #             return response.json()
 
     async def delete_message(self, fail_on_error=False, **kwargs) -> dict:
         return await self.post('deleteMessage', fail_on_error=fail_on_error, **kwargs)

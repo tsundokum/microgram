@@ -13,10 +13,10 @@ pip install microgram
 ```
 # Examples
 ## Echo bot
-```python3
-from minigram import Bot
+```python
+from microgram import Bot
 
-bot = Bot('Put your bot api key here')
+bot = Bot('Put your bot api key here', 'logging-dir')
 
 @bot.handler
 async def echo(update):                                              # https://core.telegram.org/bots/api#update
@@ -30,4 +30,11 @@ if __name__ == "__main__":
     bot.run()
 ```
 
-
+## Send Voice Message
+```python
+await bot.post('sendVoice', 
+               chat_id=CHAT_ID, 
+               caption='hello world', 
+               files={'voice': open(ogg_file_path, 'rb')})
+```
+same with [sendDocument](https://core.telegram.org/bots/api#senddocument), [sendPhoto](https://core.telegram.org/bots/api#sendphoto), etc
