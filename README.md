@@ -21,7 +21,7 @@ bot = Bot('Put your bot api key here', 'logging-dir')
 @bot.handler
 async def echo(update):                                              # https://core.telegram.org/bots/api#update
     if message := update.get('message'):
-        await bot.send_message(chat_id=message['chat']['id'],
+        await bot.asend_message(chat_id=message['chat']['id'],
                                text=message['text'],
                                reply_to_message=message['id'])
 
@@ -32,9 +32,9 @@ if __name__ == "__main__":
 
 ## Send Voice Message
 ```python
-await bot.post('sendVoice', 
-               chat_id=CHAT_ID, 
-               caption='hello world', 
-               files={'voice': open(ogg_file_path, 'rb')})
+bot.sendVoice( 
+    chat_id=CHAT_ID, 
+    caption='hello world', 
+    files={'voice': open(ogg_file_path, 'rb')})
 ```
 same with [sendDocument](https://core.telegram.org/bots/api#senddocument), [sendPhoto](https://core.telegram.org/bots/api#sendphoto), etc

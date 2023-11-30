@@ -3,10 +3,12 @@
 
 import asyncio
 import bisect
+from functools import partial
 import sys
-from typing import AsyncGenerator, Generator, Optional, List, Set, Tuple
-from contextlib import asynccontextmanager
-from time import monotonic, time
+import threading
+from typing import Any, AsyncGenerator, Generator, Optional, List, Set, Tuple
+from contextlib import asynccontextmanager, contextmanager
+from time import monotonic, sleep, time
 from pathlib import Path
 from datetime import datetime
 import logging
@@ -86,7 +88,7 @@ def func_reply_only_first(main_reply_id: Optional[int], prev_reply_id: Optional[
     
 
 async def ON_ERROR_PRINT_STDERR(update, error):
-    print(f'{error} while processing {update}', file=sys.stderr)
+    print(f'{repr(error)} while processing {update}', file=sys.stderr)
 
 
 class Bot:
@@ -101,7 +103,7 @@ class Bot:
         self._status_active_workers_count = -1
         self._status_supervisor_last_check = -1
 
-    async def post(self, method: str, fail_on_error=False, **kwargs):
+    async def apost(self, method: str, fail_on_error=False, **kwargs):
         url = f'https://api.telegram.org/bot{self.token}/{method}'
         async with httpx.AsyncClient() as client:
             started = monotonic()
@@ -121,20 +123,41 @@ class Bot:
             if fail_on_error and response.status_code != 200:
                 raise Exception(f'Failed to call `{method}`: {response.status_code}, {response.text}')
             return j
+        
+    def post(self, method: str, fail_on_error=False, **kwargs):
+        url = f'https://api.telegram.org/bot{self.token}/{method}'
+        with httpx.Client() as client:
+            started = monotonic()
+            if files := kwargs.get('files'):
+                data = {k: v for k, v in kwargs.items() if k != 'files'}
+                response = client.post(url, data=data, files=files)
+            else:
+                response = client.post(url, json=kwargs)
+            try:
+                j = response.json()
+            except:
+                j = {'text': response.text}
+            rt = monotonic() - started
+            self.posts_logger.info({'method': method, 'status': response.status_code,
+                                    'request': kwargs, 'response': j,
+                                    'response_time': rt})
+            if fail_on_error and response.status_code != 200:
+                raise Exception(f'Failed to call `{method}`: {response.status_code}, {response.text}')
+            return j
+        
+    def __getattribute__(self, __name: str) -> Any:
+        try:
+            attr = object.__getattribute__(self, __name)
+            return attr
+        except AttributeError:
+            return partial(self.post, __name)
 
-
-    async def delete_message(self, fail_on_error=False, **kwargs) -> dict:
-        return await self.post('deleteMessage', fail_on_error=fail_on_error, **kwargs)
-
-    async def edit_message_text(self, fail_on_error=False, **kwargs) -> dict:
-        return await self.post('editMessageText', fail_on_error=fail_on_error, **kwargs)
-
-    async def send_message_typing(self, typing_delay_sec=2, **kwargs):
-        async with self.chat_action(chat_id=kwargs['chat_id']):
+    async def asend_message_typing(self, typing_delay_sec=2, **kwargs):
+        async with self.achat_action(chat_id=kwargs['chat_id']):
             await asyncio.sleep(typing_delay_sec)
-            await self.send_message(**kwargs)
+            await self.asend_message(**kwargs)
 
-    async def send_message(self, fail_on_error=True, message_limit=MESSAGE_LIMIT,
+    async def asend_message(self, fail_on_error=True, message_limit=MESSAGE_LIMIT,
                            func_reply_to_message_id=func_reply_chaining, 
                            **kwargs) -> Optional[dict]:
         text = kwargs.get('text')
@@ -144,7 +167,7 @@ class Bot:
         async def send_func(**override_kwargs) -> dict:
             params = dict(kwargs)
             params.update(override_kwargs)
-            return await self.post('sendMessage', fail_on_error=fail_on_error, **params)
+            return await self.apost('sendMessage', fail_on_error=fail_on_error, **params)
 
         prev_reply_id = None
         main_reply_id = kwargs.get('reply_to_message_id')
@@ -152,10 +175,29 @@ class Bot:
             rid = func_reply_to_message_id(main_reply_id, prev_reply_id)
             r = await send_func(text=c, reply_to_message_id=rid) 
             prev_reply_id = r.get('result', {}).get('message_id')
-
         return r
+    
+    def send_message(self, fail_on_error=True, message_limit=MESSAGE_LIMIT,
+                           func_reply_to_message_id=func_reply_chaining, 
+                           **kwargs) -> Optional[dict]:
+        text = kwargs.get('text')
+        if not text:
+            return
 
-    async def poll(self, poll_timeout=POLL_TIMEOUT, poll_wait_sec=POLL_WAIT_SEC, max_errors=POLL_MAX_ERRORS) -> AsyncGenerator:
+        def send_func(**override_kwargs) -> dict:
+            params = dict(kwargs)
+            params.update(override_kwargs)
+            return self.post('sendMessage', fail_on_error=fail_on_error, **params)
+
+        prev_reply_id = None
+        main_reply_id = kwargs.get('reply_to_message_id')
+        for c in chunk(max_length=message_limit, **kwargs):
+            rid = func_reply_to_message_id(main_reply_id, prev_reply_id)
+            r = send_func(text=c, reply_to_message_id=rid) 
+            prev_reply_id = r.get('result', {}).get('message_id')
+        return r    
+
+    async def apoll(self, poll_timeout=POLL_TIMEOUT, poll_wait_sec=POLL_WAIT_SEC, max_errors=POLL_MAX_ERRORS) -> AsyncGenerator:
         async with httpx.AsyncClient() as client:
             errors_count = 0
             while True:
@@ -187,18 +229,70 @@ class Bot:
 
                 await asyncio.sleep(poll_wait_sec)
 
+    def poll(self, poll_timeout=POLL_TIMEOUT, poll_wait_sec=POLL_WAIT_SEC, max_errors=POLL_MAX_ERRORS) -> AsyncGenerator:
+        with httpx.Client() as client:
+            errors_count = 0
+            while True:
+                if errors_count > max_errors:
+                    raise RuntimeError(f'Reached {errors_count} errors')
+                url = f'https://api.telegram.org/bot{self.token}/getUpdates?limit=1&offset={self.polling_offset}'
+                try:
+                    response = client.get(url, timeout=poll_timeout)
+                except (httpx.ConnectError, httpx.TimeoutException) as ex:
+                    errors_count += 1
+                    sleep(poll_wait_sec)
+                    continue
+
+                resp = response.json()
+                if not resp.get('ok') and resp.get('error_code'):
+                    if ra := resp.get('parameters', {}).get('retry_after'):
+                        sleep(ra)
+                # Compare with None because updates can be emptry list
+                elif (updates := resp.get('result')) is not None:
+                    errors_count = 0
+                    for u in updates:
+                        self.polling_offset = u['update_id'] + 1
+                        self.updates_logger.info(u)
+                        yield u
+                    
+                else:
+                    print('NO RESULT', resp)
+                    self.updates_logger.error('getUpdates', extra=resp)
+
+                sleep(poll_wait_sec)
+
+    async def adownload_file(self, file_id) -> bytes:
+        """Example `file_id`
+        file_id = kk(update, 'message voice file_id')"""
+        r = await self.post("getFile", file_id=file_id)
+        file_path = r['result']['file_path']
+
+        async with httpx.AsyncClient() as client:
+            rf = await client.get(f"https://api.telegram.org/file/bot{self.token}/{file_path}")
+            return rf.content
+
+    def download_file(self, file_id) -> bytes:
+        """Example `file_id`
+        file_id = kk(update, 'message voice file_id')"""
+        r = self.getFile(file_id=file_id)
+        file_path = r['result']['file_path']
+
+        rf = httpx.get(f"https://api.telegram.org/file/bot{self.token}/{file_path}")
+        return rf.content
+                
+
     @asynccontextmanager
-    async def chat_action(self, chat_id, action='typing', text_while_waiting=None):
+    async def achat_action(self, chat_id, action='typing', text_while_waiting=None):
         message_id_while_waiting = None
         lock = asyncio.Event()
 
         if text_while_waiting:
-            r = await self.send_message(chat_id=chat_id, text=text_while_waiting,
+            r = await self.asend_message(chat_id=chat_id, text=text_while_waiting,
                                         disable_notification=True)
             message_id_while_waiting = r['result']['message_id']
         async def act(lock):
             while not lock.is_set():
-                await self.post('sendChatAction', action=action, chat_id=chat_id)
+                await self.apost('sendChatAction', action=action, chat_id=chat_id)
                 await asyncio.sleep(5)
         asyncio.create_task(act(lock))
         try:
@@ -206,13 +300,38 @@ class Bot:
         finally:
             lock.set()
             if message_id_while_waiting:
-                await self.post("deleteMessage", chat_id=chat_id, message_id=message_id_while_waiting)
+                await self.apost("deleteMessage", chat_id=chat_id, message_id=message_id_while_waiting)
+
+    def _keep_sending_chat_actions(self, chat_id, action, stop_event=None):
+        while not (stop_event and stop_event.is_set()):
+            self.sendChatAction(chat_id=chat_id, action=action)
+            sleep(5)
+
+    @contextmanager
+    def chat_action(self, chat_id, action='typing', text_while_waiting=None):
+        message_id_while_waiting = None        
+        if text_while_waiting:
+            r = self.send_message(chat_id=chat_id, 
+                                  text=text_while_waiting,
+                                  disable_notification=True)
+            message_id_while_waiting = r['result']['message_id']
+
+        stop_event = threading.Event()
+        thread = threading.Thread(target=self._keep_sending_chat_actions, args=(chat_id, action, stop_event))
+        thread.start()
+        try:
+            yield
+        finally:
+            stop_event.set()
+            thread.join()
+            if message_id_while_waiting:
+                self.deleteMessage(chat_id=chat_id, message_id=message_id_while_waiting)
             
     def handler(self, func):
         self._handlers.append(func)
         return func
 
-    async def _process_updates(self, queue, on_error):
+    async def _aprocess_updates(self, queue, on_error):
         while True:
             update = await queue.get()
             try:
@@ -227,7 +346,7 @@ class Bot:
             finally:
                 queue.task_done()
 
-    async def _supervisor(self, tasks, timer):
+    async def _asupervisor(self, tasks, timer):
         while True:
             count = 0
             for t in tasks:
@@ -240,7 +359,7 @@ class Bot:
                 self._status_timer_running = True
             await asyncio.sleep(1)
 
-    async def _check_scheduled(self):
+    async def _acheck_scheduled(self):
         while True:
             now = time()
             if self._scheduled_tasks:
@@ -261,11 +380,11 @@ class Bot:
         q = asyncio.Queue()
         tasks = []
         for i in range(workers_count):
-            tasks.append(asyncio.create_task(self._process_updates(q, on_error)))
+            tasks.append(asyncio.create_task(self._aprocess_updates(q, on_error)))
 
-        timer = asyncio.create_task(self._check_scheduled())
-        sv = asyncio.create_task(self._supervisor(tasks, timer))
-        async for update in self.poll():
+        timer = asyncio.create_task(self._acheck_scheduled())
+        sv = asyncio.create_task(self._asupervisor(tasks, timer))
+        async for update in self.apoll():
             await q.put(update)
 
     def run(self, workers_count=DEFAULT_WORKERS_COUNT, on_error=ON_ERROR_PRINT_STDERR):
