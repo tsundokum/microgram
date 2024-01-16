@@ -206,7 +206,7 @@ class Bot:
                 url = f'https://api.telegram.org/bot{self.token}/getUpdates?limit=1&offset={self.polling_offset}'
                 try:
                     response = await client.get(url, timeout=poll_timeout)
-                except (httpx.ConnectError, httpx.TimeoutException) as ex:
+                except (httpx.ConnectError, httpx.TimeoutException, httpx.ReadError) as ex:
                     errors_count += 1
                     await asyncio.sleep(poll_wait_sec)
                     continue
@@ -238,7 +238,7 @@ class Bot:
                 url = f'https://api.telegram.org/bot{self.token}/getUpdates?limit=1&offset={self.polling_offset}'
                 try:
                     response = client.get(url, timeout=poll_timeout)
-                except (httpx.ConnectError, httpx.TimeoutException) as ex:
+                except (httpx.ConnectError, httpx.TimeoutException, httpx.ReadError) as ex:
                     errors_count += 1
                     sleep(poll_wait_sec)
                     continue
