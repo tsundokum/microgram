@@ -2,7 +2,7 @@ from setuptools import setup
   
 setup(
     name='microgram',
-    version='1.0.1',
+    version='1.0.2',
     description='Simplest possible Python wrapper for Telegram Bot API',
     readme = "README.md",
     packages=['microgram'],

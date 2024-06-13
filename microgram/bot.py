@@ -264,7 +264,7 @@ class Bot:
     async def adownload_file(self, file_id) -> bytes:
         """Example `file_id`
         file_id = kk(update, 'message voice file_id')"""
-        r = await self.post("getFile", file_id=file_id)
+        r = await self.apost("getFile", file_id=file_id)
         file_path = r['result']['file_path']
 
         async with httpx.AsyncClient() as client:
